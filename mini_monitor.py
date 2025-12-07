@@ -37,7 +37,7 @@ EMAIL_PASSWORD = ""  # Use app password for Gmail
 CHECK_INTERVAL_MINUTES = 10
 
 # Status report interval (send a "still alive" report every X hours)
-STATUS_REPORT_HOURS = 6
+STATUS_REPORT_HOURS = 24
 
 # URLs
 MAIN_STORE_URL = "https://onlinestore.mini.com.tr"
