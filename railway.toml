@@ -1,0 +1,6 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "playwright install chromium && python3 mini_monitor.py"
+restartPolicyType = "always"
