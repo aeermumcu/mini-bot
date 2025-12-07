@@ -330,8 +330,12 @@ async def main():
             f"Check interval: {CHECK_INTERVAL_MINUTES} min"
         )
     
-    # Initial check
-    await run_checks()
+    # Initial check with error handling
+    try:
+        await run_checks()
+    except Exception as e:
+        logger.error(f"Initial check failed: {e}")
+        await send_telegram_notification(f"⚠️ Initial check failed: {e}")
     
     # Continuous monitoring
     while True:
@@ -346,7 +350,8 @@ async def main():
                 logger.info("🎉 AVAILABILITY DETECTED! Continuing monitoring...")
         except Exception as e:
             logger.error(f"Error during check: {e}")
-            # Continue monitoring despite errors
+            # Don't crash - just continue to next check
+            await asyncio.sleep(60)  # Wait a minute before retrying
 
 
 if __name__ == "__main__":
@@ -354,3 +359,9 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("\nMonitor stopped by user.")
+    except Exception as e:
+        # Log fatal errors but don't crash immediately
+        logging.error(f"Fatal error: {e}")
+        import time
+        time.sleep(300)  # Wait 5 minutes before Railway restarts
+
