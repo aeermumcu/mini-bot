@@ -36,6 +36,9 @@ EMAIL_PASSWORD = ""  # Use app password for Gmail
 # Check interval in minutes (be respectful to the server)
 CHECK_INTERVAL_MINUTES = 10
 
+# Status report interval (send a "still alive" report every X hours)
+STATUS_REPORT_HOURS = 6
+
 # URLs
 MAIN_STORE_URL = "https://onlinestore.mini.com.tr"
 STOCK_LIST_URL = "https://onlinestore.mini.com.tr/stok-listesi?modelCodes=41GA"
@@ -43,6 +46,10 @@ STOCK_LIST_URL = "https://onlinestore.mini.com.tr/stok-listesi?modelCodes=41GA"
 # Target model
 TARGET_MODEL = "COUNTRYMAN E"
 TARGET_PACK = "Favoured"
+
+# Tracking variables
+check_count = 0
+start_time = None
 
 # ============================================================================
 # Logging Setup
@@ -312,11 +319,42 @@ async def run_checks():
             await browser.close()
 
 
+async def send_status_report():
+    """Send a status report to Telegram."""
+    global check_count, start_time
+    
+    if not start_time:
+        return
+    
+    uptime = datetime.now() - start_time
+    hours = int(uptime.total_seconds() // 3600)
+    minutes = int((uptime.total_seconds() % 3600) // 60)
+    
+    message = (
+        f"📊 <b>Status Report</b>\n\n"
+        f"✅ Monitor is running\n"
+        f"⏱ Uptime: {hours}h {minutes}m\n"
+        f"🔍 Checks completed: {check_count}\n"
+        f"📅 Next report in {STATUS_REPORT_HOURS}h\n\n"
+        f"<i>Tasarla: ❌ | Stock: ❌</i>"
+    )
+    
+    await send_telegram_notification(message)
+    logger.info(f"Status report sent - {check_count} checks, uptime {hours}h {minutes}m")
+
+
 async def main():
     """Main entry point."""
+    global check_count, start_time
+    
+    start_time = datetime.now()
+    check_count = 0
+    last_report_time = datetime.now()
+    
     logger.info("🚗 Mini Countryman E Favoured Monitor Started")
     logger.info(f"Target: {TARGET_MODEL} - {TARGET_PACK} pack")
     logger.info(f"Check interval: {CHECK_INTERVAL_MINUTES} minutes")
+    logger.info(f"Status report interval: {STATUS_REPORT_HOURS} hours")
     
     # Validate Telegram config
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -327,12 +365,14 @@ async def main():
         await send_telegram_notification(
             "🚗 <b>Mini Monitor Started!</b>\n\n"
             f"Monitoring Countryman E - {TARGET_PACK} pack\n"
-            f"Check interval: {CHECK_INTERVAL_MINUTES} min"
+            f"Check interval: {CHECK_INTERVAL_MINUTES} min\n"
+            f"Status reports every {STATUS_REPORT_HOURS}h"
         )
     
     # Initial check with error handling
     try:
         await run_checks()
+        check_count += 1
     except Exception as e:
         logger.error(f"Initial check failed: {e}")
         await send_telegram_notification(f"⚠️ Initial check failed: {e}")
@@ -344,10 +384,18 @@ async def main():
         
         try:
             tasarla, stock = await run_checks()
+            check_count += 1
             
-            # If either is available, increase check frequency temporarily
+            # If either is available, notify!
             if tasarla or stock:
                 logger.info("🎉 AVAILABILITY DETECTED! Continuing monitoring...")
+            
+            # Check if it's time for a status report
+            hours_since_report = (datetime.now() - last_report_time).total_seconds() / 3600
+            if hours_since_report >= STATUS_REPORT_HOURS:
+                await send_status_report()
+                last_report_time = datetime.now()
+                
         except Exception as e:
             logger.error(f"Error during check: {e}")
             # Don't crash - just continue to next check
