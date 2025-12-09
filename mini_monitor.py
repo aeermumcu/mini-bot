@@ -21,10 +21,14 @@ from playwright.async_api import async_playwright
 # CONFIGURATION - Edit these values
 # ============================================================================
 
-# Telegram Bot Configuration
-# Create a bot via @BotFather on Telegram and get your chat ID via @userinfobot
-TELEGRAM_BOT_TOKEN = "8559897411:AAHzGFFrMek5-Uwnnm9ksmCOM1WLbEdq2og"  # e.g., "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
-TELEGRAM_CHAT_ID = "8245984629"    # e.g., "123456789"
+# Telegram Bot Configuration - Multiple recipients
+# Each recipient needs: (bot_token, chat_id, name)
+TELEGRAM_RECIPIENTS = [
+    # Alp
+    ("8559897411:AAHzGFFrMek5-Uwnnm9ksmCOM1WLbEdq2og", "8245984629", "Alp"),
+    # Father
+    ("8418072243:AAHmN49HplJ4Y9DH0vZcniycIkxd3ZJKf-A", "8596461871", "Father"),
+]
 
 # Email Configuration (optional fallback)
 EMAIL_ENABLED = False
@@ -70,30 +74,33 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 async def send_telegram_notification(message: str):
-    """Send notification via Telegram bot."""
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("Telegram not configured. Skipping notification.")
+    """Send notification via Telegram bot to ALL recipients."""
+    if not TELEGRAM_RECIPIENTS:
+        logger.warning("No Telegram recipients configured. Skipping notification.")
         return False
     
-    try:
-        import httpx
-        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload)
-            if response.status_code == 200:
-                logger.info("Telegram notification sent successfully!")
-                return True
-            else:
-                logger.error(f"Telegram error: {response.text}")
-                return False
-    except Exception as e:
-        logger.error(f"Failed to send Telegram notification: {e}")
-        return False
+    import httpx
+    success_count = 0
+    
+    async with httpx.AsyncClient() as client:
+        for bot_token, chat_id, name in TELEGRAM_RECIPIENTS:
+            try:
+                url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                payload = {
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML"
+                }
+                response = await client.post(url, json=payload)
+                if response.status_code == 200:
+                    logger.info(f"Telegram notification sent to {name}!")
+                    success_count += 1
+                else:
+                    logger.error(f"Telegram error for {name}: {response.text}")
+            except Exception as e:
+                logger.error(f"Failed to send Telegram notification to {name}: {e}")
+    
+    return success_count > 0
 
 
 def send_email_notification(subject: str, message: str):
