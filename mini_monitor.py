@@ -364,10 +364,11 @@ async def main():
     logger.info(f"Status report interval: {STATUS_REPORT_HOURS} hours")
     
     # Validate Telegram config
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.warning("⚠️  Telegram not configured! Edit mini_monitor.py to add your bot token and chat ID.")
+    if not TELEGRAM_RECIPIENTS:
+        logger.warning("⚠️  Telegram not configured! Edit mini_monitor.py to add recipients.")
         logger.warning("   See README.md for setup instructions.")
     else:
+        logger.info(f"Notifying {len(TELEGRAM_RECIPIENTS)} recipient(s)")
         # Send test notification
         await send_telegram_notification(
             "🚗 <b>Mini Monitor Started!</b>\n\n"
