@@ -55,12 +55,14 @@ start_time = None
 # Logging Setup
 # ============================================================================
 
+import sys
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('mini_monitor.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(sys.stdout)  # Use stdout instead of stderr
     ]
 )
 logger = logging.getLogger(__name__)
