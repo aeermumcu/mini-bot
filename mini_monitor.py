@@ -37,7 +37,7 @@ EMAIL_PASSWORD = ""  # Use app password for Gmail
 CHECK_INTERVAL_MINUTES = 5
 
 # Status report interval (send a "still alive" report every X hours)
-STATUS_REPORT_HOURS = 24
+STATUS_REPORT_HOURS = 8
 
 # URLs
 MAIN_STORE_URL = "https://onlinestore.mini.com.tr"
@@ -50,6 +50,7 @@ TARGET_PACK = "Favoured"
 # Tracking variables
 check_count = 0
 start_time = None
+pack_counts = {}  # Track how many times each pack was seen
 
 # ============================================================================
 # Logging Setup
@@ -162,7 +163,8 @@ async def check_tasarla_button(page) -> tuple[bool, str]:
     logger.info("Checking for Tasarla button on Countryman E...")
     
     try:
-        await page.goto(MAIN_STORE_URL, wait_until="networkidle", timeout=30000)
+        await page.goto(MAIN_STORE_URL, wait_until="load", timeout=60000)
+        await page.wait_for_timeout(5000)  # Wait for JS carousel to initialize
         
         # Accept cookies if present
         try:
@@ -173,42 +175,81 @@ async def check_tasarla_button(page) -> tuple[bool, str]:
         except Exception:
             pass  # Cookie banner might not appear
         
-        # Find the carousel and navigate to Countryman E
-        # The carousel has Next/Previous buttons - need to find Countryman E slide
-        max_slides = 10
+        # The carousel shows multiple models. We need to navigate to Countryman E
+        # and check if THAT slide has Tasarla button.
+        # Strategy: Click Next until we see "COUNTRYMAN E" as the main heading
+        
+        max_slides = 5
         found_countryman = False
         
         for i in range(max_slides):
-            # Check current slide content
-            page_content = await page.content()
+            await page.wait_for_timeout(1500)  # Wait for slide transition
             
-            if "COUNTRYMAN E" in page_content.upper():
+            # Get visible text on the page to find the current active model name
+            # The active model name appears prominently in the carousel
+            visible_text = await page.evaluate("document.body.innerText")
+            
+            # Check if Countryman E is the currently VISIBLE main model
+            # Look for the model name pattern that indicates it's the active slide
+            lines = visible_text.split('\n')
+            is_countryman_e_slide = False
+            
+            for line in lines:
+                line_upper = line.strip().upper()
+                # The active model shows as "MINI COUNTRYMAN E" prominently
+                if "MINI COUNTRYMAN E" in line_upper and "MINI COUNTRYMAN C" not in line_upper:
+                    is_countryman_e_slide = True
+                    break
+            
+            if is_countryman_e_slide:
                 found_countryman = True
-                logger.info("Found Countryman E slide!")
+                logger.info(f"Found Countryman E slide at position {i}!")
                 
-                # Now check if Tasarla button exists
-                tasarla_button = page.locator("button:has-text('Tasarla'), a:has-text('Tasarla')")
+                # Now check if this slide has both Otomobilleri Göster AND Tasarla
+                # or just Otomobilleri Göster
+                buttons_text = await page.locator('button').all_text_contents()
+                buttons_text = [b.strip() for b in buttons_text if b.strip()]
                 
-                if await tasarla_button.count() > 0:
-                    # Verify it's visible (not hidden)
-                    if await tasarla_button.first.is_visible(timeout=2000):
-                        logger.info("✅ TASARLA BUTTON FOUND!")
+                # Count how many Tasarla buttons are visible
+                tasarla_count = sum(1 for b in buttons_text if 'Tasarla' in b)
+                otomobil_count = sum(1 for b in buttons_text if 'Otomobilleri' in b)
+                
+                logger.info(f"Buttons visible - Tasarla: {tasarla_count}, Otomobilleri: {otomobil_count}")
+                
+                # If we're on position 0 (first slide) and see Tasarla, it's for Cooper, not Countryman
+                # If we're on position 1+ and the slide shows Countryman E, check button context
+                
+                # The safest check: when on Countryman E slide, are there 2 Tasarla buttons?
+                # (one for prev model Cooper, one for Countryman E) vs 1 (only Cooper)
+                # OR: Try to click Next once more to go past Countryman E, then Previous back
+                # and see if position 1 has Tasarla
+                
+                # Simple heuristic: Countryman E is at position 1
+                # If tasarla_count >= 2, it means Countryman E also has Tasarla
+                # If tasarla_count == 1, only Cooper has it
+                
+                if i >= 1:  # We navigated to Countryman E
+                    # Check if Tasarla is available specifically for this model
+                    # by looking at button order - the second Otomobilleri/Tasarla pair would be Countryman's
+                    if tasarla_count >= 2 or (tasarla_count >= 1 and i == 0):
+                        # There's a Tasarla for Countryman E!
+                        logger.info("✅ TASARLA BUTTON FOUND FOR COUNTRYMAN E!")
                         return True, "Tasarla button is now available for Countryman E!"
                 
-                # Button not found on Countryman E slide
-                logger.info("Tasarla button not present on Countryman E slide")
+                # Only Otomobilleri Göster, no Tasarla for Countryman E
+                logger.info("Tasarla button not present for Countryman E")
                 return False, "Tasarla button not available"
             
             # Click Next to go to next slide
-            next_btn = page.locator("button[aria-label='Next'], button:has-text('›')")
-            if await next_btn.count() > 0 and await next_btn.first.is_visible():
+            next_btn = page.locator("button:has-text('Next')")
+            if await next_btn.count() > 0 and await next_btn.first.is_visible(timeout=2000):
                 await next_btn.first.click()
-                await page.wait_for_timeout(1500)  # Wait for animation
             else:
+                logger.warning(f"Next button not found at slide {i}")
                 break
         
         if not found_countryman:
-            logger.warning("Could not find Countryman E in carousel")
+            logger.warning("Could not find Countryman E in carousel after checking all slides")
             return False, "Countryman E not found in carousel"
         
         return False, "Check completed"
@@ -221,13 +262,17 @@ async def check_tasarla_button(page) -> tuple[bool, str]:
 async def check_stock_for_favoured(page) -> tuple[bool, str, list]:
     """
     Check stock list for Favoured pack Countryman E.
+    Also tracks all pack types found for status reports.
     
     Returns: (is_available, message, matching_vehicles)
     """
+    global pack_counts
+    
     logger.info("Checking stock for Favoured pack...")
     
     try:
-        await page.goto(STOCK_LIST_URL, wait_until="networkidle", timeout=30000)
+        await page.goto(STOCK_LIST_URL, wait_until="load", timeout=60000)
+        await page.wait_for_timeout(5000)
         
         # Accept cookies if present
         try:
@@ -238,25 +283,44 @@ async def check_stock_for_favoured(page) -> tuple[bool, str, list]:
         except Exception:
             pass
         
-        # Wait for stock list to load
-        await page.wait_for_timeout(3000)
+        # Get all visible text
+        visible_text = await page.evaluate("document.body.innerText")
         
-        # Use JavaScript to check VISIBLE text content (not raw HTML which may have false positives)
-        has_favoured = await page.evaluate(
-            f"document.body.innerText.toLowerCase().includes('{TARGET_PACK.lower()}')"
-        )
+        # Extract pack names from the stock list
+        # Packs typically appear as "John Cooper Works" or "Favoured" etc.
+        packs_found = []
+        lines = visible_text.split('\n')
+        
+        for line in lines:
+            line_stripped = line.strip()
+            # Look for known pack names
+            if 'John Cooper Works' in line_stripped:
+                packs_found.append('John Cooper Works')
+            if 'Favoured' in line_stripped:
+                packs_found.append('Favoured')
+            if 'Essential' in line_stripped:
+                packs_found.append('Essential')
+            if 'Classic' in line_stripped:
+                packs_found.append('Classic')
+        
+        # Update pack counts
+        for pack in packs_found:
+            pack_counts[pack] = pack_counts.get(pack, 0) + 1
+        
+        if packs_found:
+            logger.info(f"Packs found in stock: {set(packs_found)}")
+        else:
+            logger.info("No packs found in stock list")
+        
+        # Check specifically for Favoured
+        has_favoured = TARGET_PACK in packs_found
         
         if has_favoured:
             logger.info("✅ FAVOURED PACK FOUND IN STOCK!")
             
-            # Try to extract more details about matching vehicles
+            # Get context lines for Favoured
             matching_info = []
-            
-            # Get all visible text and look for context around "Favoured"
-            visible_text = await page.evaluate("document.body.innerText")
-            
-            # Look for lines containing "Favoured"
-            for line in visible_text.split('\n'):
+            for line in lines:
                 if TARGET_PACK.lower() in line.lower():
                     matching_info.append(line.strip()[:200])
             
@@ -323,7 +387,7 @@ async def run_checks():
 
 async def send_status_report():
     """Send a status report to Telegram."""
-    global check_count, start_time
+    global check_count, start_time, pack_counts
     
     if not start_time:
         return
@@ -332,17 +396,29 @@ async def send_status_report():
     hours = int(uptime.total_seconds() // 3600)
     minutes = int((uptime.total_seconds() % 3600) // 60)
     
+    # Build pack summary
+    pack_summary = ""
+    if pack_counts:
+        pack_lines = []
+        for pack, count in sorted(pack_counts.items()):
+            emoji = "⭐" if pack == TARGET_PACK else "📦"
+            pack_lines.append(f"{emoji} {pack}: {count}x")
+        pack_summary = "\n".join(pack_lines)
+    else:
+        pack_summary = "No packs found yet"
+    
     message = (
         f"📊 <b>Status Report</b>\n\n"
         f"✅ Monitor is running\n"
         f"⏱ Uptime: {hours}h {minutes}m\n"
         f"🔍 Checks completed: {check_count}\n"
         f"📅 Next report in {STATUS_REPORT_HOURS}h\n\n"
-        f"<i>Tasarla: ❌ | Stock: ❌</i>"
+        f"<b>Packs seen (Countryman E):</b>\n{pack_summary}\n\n"
+        f"<i>Looking for: {TARGET_PACK} ⭐</i>"
     )
     
     await send_telegram_notification(message)
-    logger.info(f"Status report sent - {check_count} checks, uptime {hours}h {minutes}m")
+    logger.info(f"Status report sent - {check_count} checks, uptime {hours}h {minutes}m, packs: {pack_counts}")
 
 
 async def main():
