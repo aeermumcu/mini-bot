@@ -216,27 +216,14 @@ async def check_tasarla_button(page) -> tuple[bool, str]:
                 
                 logger.info(f"Buttons visible - Tasarla: {tasarla_count}, Otomobilleri: {otomobil_count}")
                 
-                # If we're on position 0 (first slide) and see Tasarla, it's for Cooper, not Countryman
-                # If we're on position 1+ and the slide shows Countryman E, check button context
+                # Simple logic: We're on the Countryman E slide.
+                # If there's at least 1 Tasarla button visible, Countryman E has Tasarla enabled.
+                # (Previous models like Cooper are no longer visible at position 3)
+                if tasarla_count >= 1:
+                    logger.info("✅ TASARLA BUTTON FOUND FOR COUNTRYMAN E!")
+                    return True, "Tasarla button is now available for Countryman E!"
                 
-                # The safest check: when on Countryman E slide, are there 2 Tasarla buttons?
-                # (one for prev model Cooper, one for Countryman E) vs 1 (only Cooper)
-                # OR: Try to click Next once more to go past Countryman E, then Previous back
-                # and see if position 1 has Tasarla
-                
-                # Simple heuristic: Countryman E is at position 1
-                # If tasarla_count >= 2, it means Countryman E also has Tasarla
-                # If tasarla_count == 1, only Cooper has it
-                
-                if i >= 1:  # We navigated to Countryman E
-                    # Check if Tasarla is available specifically for this model
-                    # by looking at button order - the second Otomobilleri/Tasarla pair would be Countryman's
-                    if tasarla_count >= 2 or (tasarla_count >= 1 and i == 0):
-                        # There's a Tasarla for Countryman E!
-                        logger.info("✅ TASARLA BUTTON FOUND FOR COUNTRYMAN E!")
-                        return True, "Tasarla button is now available for Countryman E!"
-                
-                # Only Otomobilleri Göster, no Tasarla for Countryman E
+                # No Tasarla button visible - only Otomobilleri Göster
                 logger.info("Tasarla button not present for Countryman E")
                 return False, "Tasarla button not available"
             
