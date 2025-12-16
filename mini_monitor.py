@@ -179,7 +179,7 @@ async def check_tasarla_button(page) -> tuple[bool, str]:
         # and check if THAT slide has Tasarla button.
         # Strategy: Click Next until we see "COUNTRYMAN E" as the main heading
         
-        max_slides = 5
+        max_slides = 10
         found_countryman = False
         
         for i in range(max_slides):
@@ -290,12 +290,15 @@ async def check_stock_for_favoured(page) -> tuple[bool, str, list]:
             if 'Classic' in line_stripped:
                 packs_found.append('Classic')
         
-        # Update pack counts
-        for pack in packs_found:
+        # Get unique packs found this check (avoid counting duplicates from page text)
+        unique_packs = set(packs_found)
+        
+        # Update pack counts - count once per check, not per text occurrence
+        for pack in unique_packs:
             pack_counts[pack] = pack_counts.get(pack, 0) + 1
         
-        if packs_found:
-            logger.info(f"Packs found in stock: {set(packs_found)}")
+        if unique_packs:
+            logger.info(f"Packs found in stock: {unique_packs}")
         else:
             logger.info("No packs found in stock list")
         
@@ -406,6 +409,10 @@ async def send_status_report():
     
     await send_telegram_notification(message)
     logger.info(f"Status report sent - {check_count} checks, uptime {hours}h {minutes}m, packs: {pack_counts}")
+    
+    # Reset counters for next reporting period
+    check_count = 0
+    pack_counts = {}
 
 
 async def main():
