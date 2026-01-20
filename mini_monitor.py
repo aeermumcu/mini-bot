@@ -34,7 +34,7 @@ EMAIL_ADDRESS = ""
 EMAIL_PASSWORD = ""  # Use app password for Gmail
 
 # Check interval in minutes (be respectful to the server)
-CHECK_INTERVAL_MINUTES = 5
+CHECK_INTERVAL_MINUTES = 60
 
 # Status report interval (send a "still alive" report every X hours)
 STATUS_REPORT_HOURS = 8
