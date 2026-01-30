@@ -51,6 +51,10 @@ TARGET_PACK = "Favoured"
 check_count = 0
 start_time = None
 pack_counts = {}  # Track how many times each pack was seen
+consecutive_failures = 0
+total_failures = 0
+last_error_message = None
+FAILURE_ALERT_THRESHOLD = 3  # Alert after this many consecutive failures
 
 # ============================================================================
 # Logging Setup
@@ -347,17 +351,23 @@ async def run_checks():
         try:
             # Check 1: Tasarla button
             tasarla_available, tasarla_msg = await check_tasarla_button(page)
-            
+
+            if tasarla_msg.startswith("Error:"):
+                logger.warning(f"Tasarla check had an error: {tasarla_msg}")
+
             if tasarla_available:
                 await notify(
                     "🎉 Tasarla Butonu Aktif!",
                     "Mini Countryman E için Tasarla butonu artık aktif! Hemen tasarlayıp sipariş verebilirsin!",
                     MAIN_STORE_URL
                 )
-            
+
             # Check 2: Stock availability
             stock_available, stock_msg, vehicles = await check_stock_for_favoured(page)
-            
+
+            if stock_msg.startswith("Error:"):
+                logger.warning(f"Stock check had an error: {stock_msg}")
+
             if stock_available:
                 vehicle_info = "\n".join(vehicles[:3])  # Show first 3 matches
                 await notify(
@@ -365,27 +375,31 @@ async def run_checks():
                     f"Mini Countryman E Favoured paket stokta bulundu!\n\n{vehicle_info}",
                     STOCK_LIST_URL
                 )
-            
+
+            # If both checks errored, raise so the main loop counts it as a failure
+            if tasarla_msg.startswith("Error:") and stock_msg.startswith("Error:"):
+                raise RuntimeError(f"Both checks failed - Tasarla: {tasarla_msg}, Stock: {stock_msg}")
+
             # Summary
             logger.info(f"Check complete - Tasarla: {'✅' if tasarla_available else '❌'}, Stock: {'✅' if stock_available else '❌'}")
-            
+
             return tasarla_available, stock_available
-            
+
         finally:
             await browser.close()
 
 
 async def send_status_report():
     """Send a status report to Telegram."""
-    global check_count, start_time, pack_counts
-    
+    global check_count, start_time, pack_counts, total_failures, consecutive_failures
+
     if not start_time:
         return
-    
+
     uptime = datetime.now() - start_time
     hours = int(uptime.total_seconds() // 3600)
     minutes = int((uptime.total_seconds() % 3600) // 60)
-    
+
     # Build pack summary
     pack_summary = ""
     if pack_counts:
@@ -396,31 +410,51 @@ async def send_status_report():
         pack_summary = "\n".join(pack_lines)
     else:
         pack_summary = "No packs found yet"
-    
+
+    # Health indicator
+    if consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+        health = f"🔴 FAILING ({consecutive_failures} consecutive failures)"
+    elif consecutive_failures > 0:
+        health = f"🟡 Unstable ({consecutive_failures} recent failure(s))"
+    else:
+        health = "✅ Healthy"
+
+    # Failure info
+    failure_info = ""
+    if total_failures > 0:
+        failure_info = f"\n⚠️ Failures this period: {total_failures}"
+        if last_error_message:
+            failure_info += f"\nLast error: {last_error_message}"
+
     message = (
         f"📊 <b>Status Report</b>\n\n"
-        f"✅ Monitor is running\n"
+        f"{health}\n"
         f"⏱ Uptime: {hours}h {minutes}m\n"
         f"🔍 Checks completed: {check_count}\n"
-        f"📅 Next report in {STATUS_REPORT_HOURS}h\n\n"
+        f"📅 Next report in {STATUS_REPORT_HOURS}h\n"
+        f"{failure_info}\n\n"
         f"<b>Packs seen (Countryman E):</b>\n{pack_summary}\n\n"
         f"<i>Looking for: {TARGET_PACK} ⭐</i>"
     )
-    
+
     await send_telegram_notification(message)
-    logger.info(f"Status report sent - {check_count} checks, uptime {hours}h {minutes}m, packs: {pack_counts}")
-    
+    logger.info(f"Status report sent - {check_count} checks, {total_failures} failures, uptime {hours}h {minutes}m, packs: {pack_counts}")
+
     # Reset counters for next reporting period
     check_count = 0
+    total_failures = 0
     pack_counts = {}
 
 
 async def main():
     """Main entry point."""
-    global check_count, start_time
-    
+    global check_count, start_time, consecutive_failures, total_failures, last_error_message
+
     start_time = datetime.now()
     check_count = 0
+    consecutive_failures = 0
+    total_failures = 0
+    last_error_message = None
     last_report_time = datetime.now()
     
     logger.info("🚗 Mini Countryman E Favoured Monitor Started")
@@ -447,7 +481,14 @@ async def main():
         check_count += 1
     except Exception as e:
         logger.error(f"Initial check failed: {e}")
-        await send_telegram_notification(f"⚠️ Initial check failed: {e}")
+        consecutive_failures += 1
+        total_failures += 1
+        last_error_message = str(e)[:200]
+        await send_telegram_notification(
+            f"⚠️ <b>Initial check failed</b>\n\n"
+            f"Error: {str(e)[:200]}\n\n"
+            f"Will retry in {CHECK_INTERVAL_MINUTES} minutes."
+        )
     
     # Continuous monitoring
     while True:
@@ -457,21 +498,56 @@ async def main():
         try:
             tasarla, stock = await run_checks()
             check_count += 1
-            
+
+            # Reset failure tracking on success
+            if consecutive_failures > 0:
+                logger.info(f"Check succeeded after {consecutive_failures} consecutive failure(s)")
+                if consecutive_failures >= FAILURE_ALERT_THRESHOLD:
+                    await send_telegram_notification(
+                        f"✅ <b>Monitor Recovered</b>\n\n"
+                        f"Checks working again after {consecutive_failures} consecutive failures."
+                    )
+            consecutive_failures = 0
+            last_error_message = None
+
             # If either is available, notify!
             if tasarla or stock:
                 logger.info("🎉 AVAILABILITY DETECTED! Continuing monitoring...")
-            
-            # Check if it's time for a status report
+
+        except Exception as e:
+            logger.error(f"Error during check: {e}")
+            consecutive_failures += 1
+            total_failures += 1
+            last_error_message = str(e)[:200]
+
+            # Alert on consecutive failures (throttled)
+            if consecutive_failures == FAILURE_ALERT_THRESHOLD:
+                await send_telegram_notification(
+                    f"⚠️ <b>Monitor Alert: {consecutive_failures} consecutive failures</b>\n\n"
+                    f"Last error: {last_error_message}\n\n"
+                    f"Will keep trying every {CHECK_INTERVAL_MINUTES} min, "
+                    f"but something may be wrong (site blocking, Chromium issue, etc)."
+                )
+            elif consecutive_failures > 0 and consecutive_failures % (FAILURE_ALERT_THRESHOLD * 4) == 0:
+                # Periodic reminder every 12 consecutive failures
+                await send_telegram_notification(
+                    f"🔴 <b>Monitor still failing</b>\n\n"
+                    f"Consecutive failures: {consecutive_failures}\n"
+                    f"Last error: {last_error_message}\n\n"
+                    f"The monitor needs attention."
+                )
+
+            # Don't crash - just continue to next check
+            await asyncio.sleep(60)  # Wait a minute before retrying
+
+        # Always check if it's time for a status report (even if check failed)
+        try:
             hours_since_report = (datetime.now() - last_report_time).total_seconds() / 3600
             if hours_since_report >= STATUS_REPORT_HOURS:
                 await send_status_report()
                 last_report_time = datetime.now()
-                
         except Exception as e:
-            logger.error(f"Error during check: {e}")
-            # Don't crash - just continue to next check
-            await asyncio.sleep(60)  # Wait a minute before retrying
+            logger.error(f"Error sending status report: {e}")
 
 
 if __name__ == "__main__":
